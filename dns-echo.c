@@ -50,6 +50,9 @@ int		port = 8053;
 static int getsocket(int reuse)
 {
 	struct sockaddr_in addr;
+#if 0
+	int bufsize = 32768;
+#endif
 
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd < 0) {
@@ -58,8 +61,18 @@ static int getsocket(int reuse)
 	}
 
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
-		perror("setsockopt");
+		perror("setsockopt(SO_REUSEPORT)");
 	}
+
+#if 0
+	if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize)) < 0) {
+		perror("setsockopt(SO_RCVBUF)");
+	}
+
+	if (setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &bufsize, sizeof(bufsize)) < 0) {
+		perror("setsockopt(SO_SENDBUF)");
+	}
+#endif
 
 	memset(&addr, 0, sizeof(addr));
 	addr.sin_family = AF_INET;
@@ -83,13 +96,9 @@ static int getfd(void *userdata)
 	return fd;
 }
 
-static int valid(unsigned char *buf, int len)
-{
-	return (len >= 12) && ((buf[2] & 0xf8) == 0);
-}
-
 static void make_echo(unsigned char *buf)
 {
+#if 0
 	/* clear AA and TC bits */
 	buf[2] &= 0xf9;
 
@@ -98,6 +107,7 @@ static void make_echo(unsigned char *buf)
 
 	/* set QR bit */
 	buf[2] |= 0x80;
+#endif
 }
 
 static void *blocking_loop(void* userdata) 
@@ -110,11 +120,37 @@ static void *blocking_loop(void* userdata)
 	while (1) {
 		socklen_t clientlen = sizeof(client);
 		int len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
-		if (len < 0 && errno != EAGAIN) break;
+		if (len < 0) {
+			if (errno != EAGAIN) break;
+		} else {
+			make_echo(buf);
+			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+		}
+	}
 
-		if (!valid(buf, len)) continue;
-		make_echo(buf);
-		sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+	if (errno) {
+		perror("recvfrom");
+	}
+
+	return NULL;
+}
+
+static void *nonblocking_loop(void* userdata) 
+{
+	int fd = getfd(userdata);
+	int size = 512;
+	unsigned char buf[size];
+	struct sockaddr_storage client;
+
+	while (1) {
+		socklen_t clientlen = sizeof(client);
+		int len = recvfrom(fd, buf, size, MSG_DONTWAIT, (struct sockaddr *)&client, &clientlen);
+		if (len < 0) {
+			if (errno != EAGAIN) break;
+		} else {
+			make_echo(buf);
+			sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&client, clientlen);
+		}
 	}
 
 	if (errno) {
@@ -127,35 +163,36 @@ static void *blocking_loop(void* userdata)
 static void *mmsg_loop(void* userdata) 
 {
 	int fd = getfd(userdata);
-	int vecsize = 64;
+	int vecsize = 16;
 	int bufsize = 512;
 	struct iovec iovecs[vecsize];
 	struct sockaddr_storage clients[vecsize];
 	unsigned char buf[vecsize][bufsize];
 	struct mmsghdr msgs[vecsize];
+	struct timespec tv = { 0, 1000L };
 	int i, n;
-
-	// initialise structures
-	for (i = 0; i < vecsize; ++i) {
-		iovecs[i].iov_base = buf[i];
-		iovecs[i].iov_len  = bufsize;
-		msgs[i].msg_hdr.msg_iov = &iovecs[i];
-		msgs[i].msg_hdr.msg_iovlen = 1;
-		msgs[i].msg_hdr.msg_name = &clients[i];
-		msgs[i].msg_hdr.msg_namelen = sizeof(clients[i]);
-	}
 
 	while (1) {
 
-		n = recvmmsg(fd, msgs, vecsize, MSG_WAITFORONE, NULL);
-		if (n < 0 && errno != EAGAIN) break;
-
-		for (i = 0; i < n; ++i) {
-			// if (!valid(buf, len)) continue;
-			make_echo(buf[i]);
+		// initialise structures
+		for (i = 0; i < vecsize; ++i) {
+			iovecs[i].iov_base = buf[i];
+			iovecs[i].iov_len  = bufsize;
+			msgs[i].msg_hdr.msg_iov = &iovecs[i];
+			msgs[i].msg_hdr.msg_iovlen = 1;
+			msgs[i].msg_hdr.msg_name = &clients[i];
+			msgs[i].msg_hdr.msg_namelen = sizeof(clients[i]);
 		}
 
-		sendmmsg(fd, msgs, n, 0);
+		n = recvmmsg(fd, msgs, vecsize, 0, &tv);
+		if (n < 0) {
+			if (errno != EAGAIN) break;
+		} else {
+			for (i = 0; i < n; ++i) {
+				make_echo(buf[i]);
+			}
+			sendmmsg(fd, msgs, n, 0);
+		}
 	}
 
 	if (errno) {
@@ -185,11 +222,12 @@ static void *polling_loop(void* userdata)
 
 		clientlen = sizeof(client);
 		len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
-
-		if (len < 0 && errno != EAGAIN) break;
-		if (!valid(buf, len)) continue;
-		make_echo(buf);
-		sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&client, clientlen);
+		if (len < 0) {
+			if (errno != EAGAIN) break;
+		} else {
+			make_echo(buf);
+			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+		}
 	}
 
 	if (errno) {
@@ -223,10 +261,12 @@ static void *select_loop(void* userdata)
 		}
 
 		len = recvfrom(fd, buf, size, MSG_DONTWAIT, (struct sockaddr *)&client, &clientlen);
-		if (len < 0 && errno != EAGAIN) break;
-		if (!valid(buf, len)) continue;
-		make_echo(buf);
-		sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&client, clientlen);
+		if (len < 0) {
+			if (errno != EAGAIN) break;
+		} else {
+			make_echo(buf);
+			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+		}
 	}
 
 	return NULL;
@@ -244,10 +284,12 @@ void libevent_func(int fd, short flags, void *userdata)
 
 	clientlen = sizeof(client);
 	len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
-	if (len < 0 && errno != EAGAIN) return;
-	if (!valid(buf, len)) return;
-	make_echo(buf);
-	sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+	if (len < 0) {
+		if (errno != EAGAIN) return;
+	} else {
+		make_echo(buf);
+		sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+	}
 }
 
 static void *libevent_loop(void *userdata)
@@ -255,6 +297,7 @@ static void *libevent_loop(void *userdata)
 	int fd = getfd(userdata);
 	struct event_base *base = event_base_new();
 	struct event *ev = event_new(base, fd, EV_READ | EV_PERSIST, libevent_func, 0);
+	fcntl(fd, F_SETFL, O_NONBLOCK);
 	event_add(ev, NULL);
 	event_base_dispatch(base);
 
@@ -264,7 +307,7 @@ static void *libevent_loop(void *userdata)
 __attribute__ ((noreturn))
 void usage(int ret) 
 {
-	fprintf(stderr, "usage: cmd [-a] [-r] [-m <block|poll|select|libevent>] [-f forks] [-t threads]\n");
+	fprintf(stderr, "usage: cmd [-a] [-r] [-m <block|nonblock|poll|select|mmsg|libevent>] [-f forks] [-t threads]\n");
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
 	exit(ret);
@@ -313,6 +356,10 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "blocking mode\n");
 			f = blocking_loop;
 			break;
+		case 'n':
+			fprintf(stderr, "non-blocking mode\n");
+			f = nonblocking_loop;
+			break;
 		case 'm':
 			fprintf(stderr, "mmsg mode\n");
 			f = mmsg_loop;
@@ -328,6 +375,8 @@ int main(int argc, char *argv[])
 		case 'l':
 			fprintf(stderr, "libevent mode (%s)\n", event_base_get_method(event_base_new()));
 			f = libevent_loop;
+			break;
+		default:
 			badargs();
 	}
 
