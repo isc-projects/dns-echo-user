@@ -1,4 +1,3 @@
-=======================================================================
 dns-echo
 =======================================================================
 
@@ -27,7 +26,6 @@ descriptor per sub-process using the `SO_REUSEPORT` socket option.
 On exit via `SIGINT` or `SIGTERM` it will display the number of
 packets that were handled by each sub process.
 
------------------------------------------------------------------------
 Building
 -----------------------------------------------------------------------
 
