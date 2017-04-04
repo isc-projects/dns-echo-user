@@ -100,7 +100,6 @@ static void cleaner(int f, int t, void *data)
 
 static void make_echo(unsigned char *buf)
 {
-#if 0
 	/* clear AA and TC bits */
 	buf[2] &= 0xf9;
 
@@ -109,7 +108,6 @@ static void make_echo(unsigned char *buf)
 
 	/* set QR bit */
 	buf[2] |= 0x80;
-#endif
 }
 
 static void *blocking_loop(void *userdata) 
