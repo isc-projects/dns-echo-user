@@ -1,5 +1,6 @@
+=======================================================================
 dns-echo
---------
+=======================================================================
 
 This is a program that replies to DNS packets with the same packet
 with the response flags modified according to RFC 1035.
@@ -25,3 +26,15 @@ descriptor per sub-process using the `SO_REUSEPORT` socket option.
 
 On exit via `SIGINT` or `SIGTERM` it will display the number of
 packets that were handled by each sub process.
+
+-----------------------------------------------------------------------
+Building
+-----------------------------------------------------------------------
+
+The code is designed to run on Linux and uses a few non-portable API
+calls.
+
+It requires libevent2 (and its development packages) to be installed.
+
+To install from git, run `autoreconf -i` to build the configure script,
+and then run `./configure` followed by `make`.
