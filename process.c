@@ -67,6 +67,9 @@ static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cf
 
 void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
+	/* create our own process group */
+	setpgrp();
+
 	if (forks < 1) {
 		make_threads(0, threads, fn, cfn, data, flags);
 	} else {
