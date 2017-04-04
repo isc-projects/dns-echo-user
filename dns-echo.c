@@ -1,31 +1,9 @@
 /*
- * $Id: $
+ * Copyright (C) 2014, 2016  Internet Systems Consortium, Inc. ("ISC")
  *
- * Copyright (c) 2015, Internet Systems Consortium, Inc. (ISC)
- * All rights reserved.
- * 
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
- *     * Redistributions of source code must retain the above copyright
- *       notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above copyright
- *       notice, this list of conditions and the following disclaimer in the
- *       documentation and/or other materials provided with the distribution.
- *     * Neither the name of ISC nor the names of its contributors may
- *       be used to endorse or promote products derived from this software
- *       without specific prior written permission.
- * 
- * THIS SOFTWARE IS PROVIDED BY ISC ''AS IS'' AND ANY
- * EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL ISC BE LIABLE FOR ANY
- * DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
- * (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
- * LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
- * ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
- * SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- *
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
 #define _GNU_SOURCE
@@ -40,16 +18,20 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <event.h>
 #include "process.h"
 
-int		port = 8053;
+int				port = 8053;
+sig_atomic_t	quit = 0;
 
 static int getsocket(int reuse)
 {
 	struct sockaddr_in addr;
+	struct timeval timeout = { 0, 100000 };	/* 0.1s */
+
 #if 0
 	int bufsize = 32768;
 #endif
@@ -62,6 +44,10 @@ static int getsocket(int reuse)
 
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
 		perror("setsockopt(SO_REUSEPORT)");
+	}
+
+	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+		perror("setsockopt(SO_RCVTIMEO)");
 	}
 
 #if 0
@@ -96,6 +82,22 @@ static int getfd(void *userdata)
 	return fd;
 }
 
+static void *count_return(uint64_t count)
+{
+	uint64_t *p = (uint64_t *)malloc(sizeof count);
+	*p = count;
+	return p;
+}
+
+static void cleaner(int f, int t, void *data)
+{
+	uint64_t p = *(uint64_t *)data;
+	free(data);
+
+	fprintf(stderr, "%d\t%d\t%lu\n", f, t, p);
+	fflush(stderr);
+}
+
 static void make_echo(unsigned char *buf)
 {
 #if 0
@@ -110,14 +112,15 @@ static void make_echo(unsigned char *buf)
 #endif
 }
 
-static void *blocking_loop(void* userdata) 
+static void *blocking_loop(void *userdata) 
 {
 	int fd = getfd(userdata);
 	int size = 512;
+	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 
-	while (1) {
+	while (!quit) {
 		socklen_t clientlen = sizeof(client);
 		int len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
 		if (len < 0) {
@@ -125,24 +128,22 @@ static void *blocking_loop(void* userdata)
 		} else {
 			make_echo(buf);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+			++count;
 		}
 	}
 
-	if (errno) {
-		perror("recvfrom");
-	}
-
-	return NULL;
+	return count_return(count);
 }
 
-static void *nonblocking_loop(void* userdata) 
+static void *nonblocking_loop(void *userdata) 
 {
 	int fd = getfd(userdata);
 	int size = 512;
+	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 
-	while (1) {
+	while (!quit) {
 		socklen_t clientlen = sizeof(client);
 		int len = recvfrom(fd, buf, size, MSG_DONTWAIT, (struct sockaddr *)&client, &clientlen);
 		if (len < 0) {
@@ -150,21 +151,19 @@ static void *nonblocking_loop(void* userdata)
 		} else {
 			make_echo(buf);
 			sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&client, clientlen);
+			++count;
 		}
 	}
 
-	if (errno) {
-		perror("recvfrom");
-	}
-
-	return NULL;
+	return count_return(count);
 }
 
-static void *mmsg_loop(void* userdata) 
+static void *mmsg_loop(void *userdata) 
 {
 	int fd = getfd(userdata);
 	int vecsize = 16;
 	int bufsize = 512;
+	uint64_t count = 0;
 	struct iovec iovecs[vecsize];
 	struct sockaddr_storage clients[vecsize];
 	unsigned char buf[vecsize][bufsize];
@@ -172,9 +171,9 @@ static void *mmsg_loop(void* userdata)
 	struct timespec tv = { 0, 1000L };
 	int i, n;
 
-	while (1) {
+	while (!quit) {
 
-		// initialise structures
+		/* initialise structures */
 		for (i = 0; i < vecsize; ++i) {
 			iovecs[i].iov_base = buf[i];
 			iovecs[i].iov_len  = bufsize;
@@ -192,20 +191,18 @@ static void *mmsg_loop(void* userdata)
 				make_echo(buf[i]);
 			}
 			sendmmsg(fd, msgs, n, 0);
+			count += n;
 		}
 	}
 
-	if (errno) {
-		perror("recvfrom");
-	}
-
-	return NULL;
+	return count_return(count);
 }
 
-static void *polling_loop(void* userdata) 
+static void *polling_loop(void *userdata) 
 {
 	int fd = getfd(userdata);
 	int size = 512;
+	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 
@@ -213,11 +210,11 @@ static void *polling_loop(void* userdata)
 		{ fd, POLLIN, 0 }
 	};
 
-	while (1) {
+	while (!quit) {
 		socklen_t clientlen;
 		int len;
 
-		int res = poll(&fds[0], 1, -1);
+		int res = poll(&fds[0], 1, 100);
 		if (res == 0) continue;
 
 		clientlen = sizeof(client);
@@ -227,33 +224,32 @@ static void *polling_loop(void* userdata)
 		} else {
 			make_echo(buf);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+			++count;
 		}
 	}
 
-	if (errno) {
-		perror("recvfrom");
-	}
-
-	return NULL;
+	return count_return(count);
 }
 
-static void *select_loop(void* userdata) 
+static void *select_loop(void *userdata) 
 {
 	int fd = getfd(userdata);
 	int size = 512;
+	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 
 	fd_set fds;
 
-	while (1) {
+	while (!quit) {
+		struct timeval timeout = { 0, 100000 }; /* 0.1s */
 		int res, len;
 
 		socklen_t clientlen = sizeof(client);
 		FD_ZERO(&fds);
 		FD_SET(fd, &fds);
 
-		res = select(fd + 1, &fds, NULL, NULL, NULL);
+		res = select(fd + 1, &fds, NULL, NULL, &timeout);
 		if (res == 0) continue;
 		if (res < 0) {
 			perror("select");
@@ -266,39 +262,43 @@ static void *select_loop(void* userdata)
 		} else {
 			make_echo(buf);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+			++count;
 		}
 	}
 
-	return NULL;
+	return count_return(count);
 }
 
 void libevent_func(int fd, short flags, void *userdata)
 {
 	int len, size = 512;
+	struct event_base *base = (struct event_base *)userdata;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 	socklen_t clientlen;
 
-	(void)flags;		// silence compiler warnings
-	(void)userdata;
+	(void)flags;		/* silence compiler warnings */
 
 	clientlen = sizeof(client);
 	len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
-	if (len < 0) {
-		if (errno != EAGAIN) return;
-	} else {
+	if (len > 0) {
 		make_echo(buf);
 		sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+	}
+
+	if (quit) {
+		event_base_loopbreak(base);
 	}
 }
 
 static void *libevent_loop(void *userdata)
 {
+	struct timeval timeout = { 0, 100000 }; /* 0.1s */
 	int fd = getfd(userdata);
 	struct event_base *base = event_base_new();
-	struct event *ev = event_new(base, fd, EV_READ | EV_PERSIST, libevent_func, 0);
+	struct event *ev = event_new(base, fd, EV_READ | EV_PERSIST, libevent_func, base);
 	fcntl(fd, F_SETFL, O_NONBLOCK);
-	event_add(ev, NULL);
+	event_add(ev, &timeout);
 	event_base_dispatch(base);
 
 	return NULL;
@@ -307,7 +307,7 @@ static void *libevent_loop(void *userdata)
 __attribute__ ((noreturn))
 void usage(int ret) 
 {
-	fprintf(stderr, "usage: cmd [-a] [-r] [-m <block|nonblock|poll|select|mmsg|libevent>] [-f forks] [-t threads]\n");
+	fprintf(stderr, "usage: cmd [-p <port>] [-a] [-r] [-m <block|nonblock|poll|select|mmsg|libevent>] [-f forks] [-t threads]\n");
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
 	exit(ret);
@@ -324,6 +324,14 @@ void badargs(void)
 	usage(EXIT_FAILURE);
 }
 
+void stop(int sig)
+{
+	if (!quit) {
+		kill(0, sig);
+	}
+	quit = 1;
+}
+
 int main(int argc, char *argv[])
 {
 	int			fd = -1;
@@ -333,7 +341,7 @@ int main(int argc, char *argv[])
 	int			affinity = 0;
 	int			flags = 0;
 	const char *mode = "b";
-	routine		f = NULL;
+	handler_fn	f = NULL;
 
 	--argc; ++argv;
 	while (argc > 0 && **argv == '-') {
@@ -394,5 +402,8 @@ int main(int argc, char *argv[])
 		flags = (forks > 0) ? FARM_AFFINITY_FORK : FARM_AFFINITY_THREAD;
 	}
 
-	farm(forks, threads, f, &fd, flags);
+	signal(SIGINT, stop);
+	signal(SIGTERM, stop);
+
+	farm(forks, threads, f, cleaner, &fd, flags);
 }

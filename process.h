@@ -4,8 +4,9 @@
 #define FARM_AFFINITY_FORK		1
 #define FARM_AFFINITY_THREAD	2
 
-typedef void *(*routine)(void *) ;
+typedef void *(*handler_fn)(void *);
+typedef void  (*cleaner_fn)(int, int, void *);
 
-extern void farm(int forks, int threads, routine fn, void *data, int flags);
+extern void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags);
 
 #endif /* __PROCESS_H */

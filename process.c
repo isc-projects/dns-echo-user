@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include <stdlib.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sched.h>
@@ -25,53 +26,55 @@ static void getcpu(cpu_set_t* cpus, int n)
 	fprintf(stderr, "unexpectedly ran out of CPUs");
 }
 
-static void make_threads(int threads, routine fn, void *data, int flags)
+static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
-	if (threads <= 1) {
-		fn(data);
-	} else {
-		pthread_t		pt[threads];
-		pthread_attr_t	attr;
-		int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
+	pthread_t		pt[threads];
+	pthread_attr_t	attr;
+	int ncpus = sysconf(_SC_NPROCESSORS_ONLN);
 
-		/* start the desired number of threads */
-		pthread_attr_init(&attr);
-		for (int i = 0; i < threads; ++i) {
-			pthread_create(&pt[i], &attr, fn, data);
-			if (flags & FARM_AFFINITY_THREAD) {
-				cpu_set_t	cpus;
-				CPU_ZERO(&cpus);
-				CPU_SET(i % ncpus, &cpus);
-				pthread_setaffinity_np(pt[i], sizeof(cpus), &cpus);
-			}
+	/* start the desired number of threads */
+	pthread_attr_init(&attr);
+	for (int i = 0; i < threads; ++i) {
+		pthread_create(&pt[i], &attr, fn, data);
+		if (flags & FARM_AFFINITY_THREAD) {
+			cpu_set_t	cpus;
+			CPU_ZERO(&cpus);
+			CPU_SET(i % ncpus, &cpus);
+			pthread_setaffinity_np(pt[i], sizeof(cpus), &cpus);
 		}
-		pthread_attr_destroy(&attr);
+	}
+	pthread_attr_destroy(&attr);
 
-		/* wait for all of the threads to finish */
-		for (int i = 0; i < threads; ++i) {
-			pthread_join(pt[i], NULL);
+	/* wait for all of the threads to finish */
+	for (int i = 0; i < threads; ++i) {
+		void *result = NULL;
+		if (pthread_join(pt[i], &result) == 0) {
+			if (cfn && result) {
+				cfn(childnum, i, result);
+			}
 		}
 	}
 }
 
-void farm(int forks, int threads, routine fn, void *data, int flags)
+void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
 	if (forks < 1) {
-		make_threads(threads, fn, data, flags);
+		make_threads(0, threads, fn, cfn, data, flags);
 	} else {
 
 		/* fork the desired number of children */
-		for (int i = 0; i < forks; ++i) {
+		for (int child = 0; child < forks; ++child) {
 			pid_t pid = fork();
 			if (pid == 0) {			/* child */
-				make_threads(threads, fn, data, flags);
+				make_threads(child, threads, fn, cfn, data, flags);
+				break;
 			} else if (pid < 0) {	/* error */
 				perror("fork");
 			} else {
 				if (flags & FARM_AFFINITY_FORK) {
 					cpu_set_t cpus;
 					sched_getaffinity(pid, sizeof(cpus), &cpus);
-					getcpu(&cpus, i);
+					getcpu(&cpus, child);
 					sched_setaffinity(pid, sizeof(cpus), &cpus);
 				}
 			}
