@@ -7,12 +7,12 @@ with the response flags modified according to RFC 1035.
 It is intended to provide a baseline measure for system throughput
 based on various socket reading APIs, specified with the `-m` flag:
 
-  `b` : blocking I/O
-  `n` : non-blocking I/O (busy spin)
-  `m` : mmsg calls (multiple messages per system call)
-  `p` : use poll(2)
-  `s` : use select(2)
-  `l` : use libevent2 (with system specific read calls)
+ *  `b` : blocking I/O
+ *  `n` : non-blocking I/O (busy spin)
+ *  `m` : mmsg calls (multiple messages per system call)
+ *  `p` : use poll(2)
+ *  `s` : use select(2)
+ *  `l` : use libevent2 (with system specific read calls)
 
 For increased throughput the program can fork multiple children (`-f`)
 and/or multiple threads (`-t`).
