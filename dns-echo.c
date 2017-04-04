@@ -98,8 +98,10 @@ static void cleaner(int f, int t, void *data)
 	fflush(stderr);
 }
 
-static void make_echo(unsigned char *buf)
+static void make_echo(unsigned char *buf, int len)
 {
+	if (len < 4) return;
+
 	/* clear AA and TC bits */
 	buf[2] &= 0xf9;
 
@@ -124,7 +126,7 @@ static void *blocking_loop(void *userdata)
 		if (len < 0) {
 			if (errno != EAGAIN) break;
 		} else {
-			make_echo(buf);
+			make_echo(buf, len);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
 			++count;
 		}
@@ -147,7 +149,7 @@ static void *nonblocking_loop(void *userdata)
 		if (len < 0) {
 			if (errno != EAGAIN) break;
 		} else {
-			make_echo(buf);
+			make_echo(buf, len);
 			sendto(fd, buf, len, MSG_DONTWAIT, (struct sockaddr *)&client, clientlen);
 			++count;
 		}
@@ -186,7 +188,7 @@ static void *mmsg_loop(void *userdata)
 			if (errno != EAGAIN) break;
 		} else {
 			for (i = 0; i < n; ++i) {
-				make_echo(buf[i]);
+				make_echo(buf[i], msgs[i].msg_len);
 			}
 			sendmmsg(fd, msgs, n, 0);
 			count += n;
@@ -220,7 +222,7 @@ static void *polling_loop(void *userdata)
 		if (len < 0) {
 			if (errno != EAGAIN) break;
 		} else {
-			make_echo(buf);
+			make_echo(buf, len);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
 			++count;
 		}
@@ -258,7 +260,7 @@ static void *select_loop(void *userdata)
 		if (len < 0) {
 			if (errno != EAGAIN) break;
 		} else {
-			make_echo(buf);
+			make_echo(buf, len);
 			sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
 			++count;
 		}
@@ -280,7 +282,7 @@ void libevent_func(int fd, short flags, void *userdata)
 	clientlen = sizeof(client);
 	len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
 	if (len > 0) {
-		make_echo(buf);
+		make_echo(buf, len);
 		sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
 	}
 
