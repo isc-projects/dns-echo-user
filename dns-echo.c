@@ -24,15 +24,21 @@
 #include <event.h>
 #include "process.h"
 
+#define SETBUFSIZE 0
+
 int				port = 8053;
 sig_atomic_t	quit = 0;
+
+const int				default_timeout = 100;		/* 100ms */
+const struct timeval	default_timeval = { 0, 100e3 };
+const struct timespec	default_timespec = { 0, 100e6 };
 
 static int getsocket(int reuse)
 {
 	struct sockaddr_in addr;
-	struct timeval timeout = { 0, 100000 };	/* 0.1s */
+	struct timeval tv = default_timeval;
 
-#if 0
+#if SETBUFSIZE != 0
 	int bufsize = 32768;
 #endif
 
@@ -46,11 +52,11 @@ static int getsocket(int reuse)
 		perror("setsockopt(SO_REUSEPORT)");
 	}
 
-	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+	if (setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv)) < 0) {
 		perror("setsockopt(SO_RCVTIMEO)");
 	}
 
-#if 0
+#if SETBUFSIZE != 0
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize)) < 0) {
 		perror("setsockopt(SO_RCVBUF)");
 	}
@@ -168,7 +174,7 @@ static void *mmsg_loop(void *userdata)
 	struct sockaddr_storage clients[vecsize];
 	unsigned char buf[vecsize][bufsize];
 	struct mmsghdr msgs[vecsize];
-	struct timespec tv = { 0, 1000L };
+	struct timespec tv = default_timespec;
 	int i, n;
 
 	while (!quit) {
@@ -214,7 +220,7 @@ static void *polling_loop(void *userdata)
 		socklen_t clientlen;
 		int len;
 
-		int res = poll(&fds[0], 1, 100);
+		int res = poll(&fds[0], 1, default_timeout);
 		if (res == 0) continue;
 
 		clientlen = sizeof(client);
@@ -242,14 +248,14 @@ static void *select_loop(void *userdata)
 	fd_set fds;
 
 	while (!quit) {
-		struct timeval timeout = { 0, 100000 }; /* 0.1s */
+		struct timeval tv = default_timeval;
 		int res, len;
 
 		socklen_t clientlen = sizeof(client);
 		FD_ZERO(&fds);
 		FD_SET(fd, &fds);
 
-		res = select(fd + 1, &fds, NULL, NULL, &timeout);
+		res = select(fd + 1, &fds, NULL, NULL, &tv);
 		if (res == 0) continue;
 		if (res < 0) {
 			perror("select");
@@ -269,10 +275,19 @@ static void *select_loop(void *userdata)
 	return count_return(count);
 }
 
+/*
+ * struct required to allow both the event_base and the count
+ * variable to be passed to the libevent callback function
+ */
+struct libevent_data {
+	struct		event_base *base;
+	uint64_t	count;
+};
+
 void libevent_func(int fd, short flags, void *userdata)
 {
 	int len, size = 512;
-	struct event_base *base = (struct event_base *)userdata;
+	struct libevent_data *data = (struct libevent_data *)userdata;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
 	socklen_t clientlen;
@@ -284,24 +299,28 @@ void libevent_func(int fd, short flags, void *userdata)
 	if (len > 0) {
 		make_echo(buf, len);
 		sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen);
+		++(data->count);
 	}
 
 	if (quit) {
-		event_base_loopbreak(base);
+		event_base_loopbreak(data->base);
 	}
 }
 
 static void *libevent_loop(void *userdata)
 {
-	struct timeval timeout = { 0, 100000 }; /* 0.1s */
 	int fd = getfd(userdata);
-	struct event_base *base = event_base_new();
-	struct event *ev = event_new(base, fd, EV_READ | EV_PERSIST, libevent_func, base);
+	struct timeval tv = default_timeval;
+	struct libevent_data data = {
+		.base = event_base_new(),
+		.count = 0
+	};
+	struct event *ev = event_new(data.base, fd, EV_READ | EV_PERSIST, libevent_func, &data);
 	fcntl(fd, F_SETFL, O_NONBLOCK);
-	event_add(ev, &timeout);
-	event_base_dispatch(base);
+	event_add(ev, &tv);
+	event_base_dispatch(data.base);
 
-	return NULL;
+	return count_return(data.count);
 }
 
 __attribute__ ((noreturn))
