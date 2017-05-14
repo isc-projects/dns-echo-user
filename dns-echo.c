@@ -14,6 +14,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <poll.h>
+#include <time.h>
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -32,6 +33,7 @@ sig_atomic_t	quit = 0;
 const int				default_timeout = 100;		/* 100ms */
 const struct timeval	default_timeval = { 0, 100e3 };
 const struct timespec	default_timespec = { 0, 100e6 };
+FILE*			output;
 
 static int getsocket(int reuse)
 {
@@ -100,8 +102,10 @@ static void cleaner(int f, int t, void *data)
 	uint64_t p = *(uint64_t *)data;
 	free(data);
 
-	fprintf(stderr, "%d\t%d\t%lu\n", f, t, p);
-	fflush(stderr);
+	if (output) {
+		fprintf(output, "%d\t%d\t%lu\n", f, t, p);
+		fflush(output);
+	}
 }
 
 static void make_echo(unsigned char *buf, int len)
@@ -424,5 +428,16 @@ int main(int argc, char *argv[])
 	signal(SIGINT, stop);
 	signal(SIGTERM, stop);
 
+	output = fopen("stats.log", "a+");
+	if (output) {
+		char buffer[200];
+		time_t now = time(NULL);
+		strftime(buffer, sizeof buffer, "%Y-%m-%d %T\n", gmtime(&now));
+		fputs(buffer, output);
+		fflush(output);
+	}
 	farm(forks, threads, f, cleaner, &fd, flags);
+	if (output) {
+		fclose(output);
+	}
 }
