@@ -330,7 +330,8 @@ static void *libevent_loop(void *userdata)
 __attribute__ ((noreturn))
 void usage(int ret) 
 {
-	fprintf(stderr, "usage: cmd [-p <port>] [-a] [-r] [-m <block|nonblock|poll|select|mmsg|libevent>] [-f forks] [-t threads]\n");
+	fprintf(stderr, "usage: cmd [-p <port>] [-o outfile] [-a] [-r] [-m <mode>] [-f forks] [-t threads]\n");
+	fprintf(stderr, "  -m : <mode> = <block|nonblock|poll|select|mmsg|libevent>\n");
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
 	exit(ret);
@@ -364,6 +365,7 @@ int main(int argc, char *argv[])
 	int			affinity = 0;
 	int			flags = 0;
 	const char *mode = "b";
+	const char *outfile = NULL;
 	handler_fn	f = NULL;
 
 	--argc; ++argv;
@@ -374,6 +376,7 @@ int main(int argc, char *argv[])
 			case 't': --argc; ++argv; check(argv); threads = atoi(*argv); break;
 			case 'm': --argc; ++argv; check(argv); mode = *argv; break;
 			case 'p': --argc; ++argv; check(argv); port = atoi(*argv); break;
+			case 'o': --argc; ++argv; check(argv); outfile = strdup(*argv); break;
 			case 'a': affinity = 1; break;
 			case 'r': reuse = 1; break;
 			case 'h': usage(EXIT_SUCCESS); break;
@@ -428,7 +431,15 @@ int main(int argc, char *argv[])
 	signal(SIGINT, stop);
 	signal(SIGTERM, stop);
 
-	output = fopen("stats.log", "a+");
+	if (outfile) {
+		output = fopen(outfile, "a+");
+		if (!output) {
+			perror("fopen");
+		}
+	} else {
+		output = stdout;
+	}
+
 	if (output) {
 		char buffer[200];
 		time_t now = time(NULL);
@@ -436,7 +447,9 @@ int main(int argc, char *argv[])
 		fputs(buffer, output);
 		fflush(output);
 	}
+
 	farm(forks, threads, f, cleaner, &fd, flags);
+
 	if (output) {
 		fclose(output);
 	}
