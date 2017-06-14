@@ -15,39 +15,50 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/select.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/ioctl.h>
 #include <netinet/in.h>
 #include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <event.h>
+
+#include <netinet/ip.h>
+#include <netinet/udp.h>
+#include <linux/if_ether.h>
+#include <linux/if_packet.h>
+#include <net/if.h>
+
 #include "process.h"
 
-#define SETBUFSIZE 0
+/* #define BUFSIZE 32768 */
 
-int				port = 8053;
-sig_atomic_t	quit = 0;
+int						port = 8053;
+sig_atomic_t			quit = 0;
 
 const int				default_timeout = 100;		/* 100ms */
 const struct timeval	default_timeval = { 0, 100e3 };
 const struct timespec	default_timespec = { 0, 100e6 };
-FILE*			output;
+FILE*					output;
 
-static int getsocket(int reuse)
+char*					ifname = NULL;
+uint32_t				fanout_arg;
+
+static int get_socket(int reuse)
 {
 	struct sockaddr_in addr;
 	struct timeval tv = default_timeval;
-
-#if SETBUFSIZE != 0
-	int bufsize = 32768;
+#if defined(BUFSIZE)
+	int bufsize = BUFSIZE;
 #endif
 
 	int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
 	if (fd < 0) {
 		perror("socket");
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	if (setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &reuse, sizeof(reuse)) < 0) {
@@ -58,7 +69,7 @@ static int getsocket(int reuse)
 		perror("setsockopt(SO_RCVTIMEO)");
 	}
 
-#if SETBUFSIZE != 0
+#if defined(BUFSIZE)
 	if (setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &bufsize, sizeof(bufsize)) < 0) {
 		perror("setsockopt(SO_RCVBUF)");
 	}
@@ -75,17 +86,51 @@ static int getsocket(int reuse)
 
 	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
 		perror("bind");
-		return EXIT_FAILURE;
+		return -1;
 	}
 
 	return fd;
 }
 
-static int getfd(void *userdata)
+static int get_packet_socket(void *userdata)
+{
+	struct sockaddr_ll addr;
+	struct ifreq ifr;
+	int fd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
+	if (fd < 0) {
+		perror("socket(AF_PACKET)");
+		return -1;
+	}
+
+	memset(&ifr, 0, sizeof(ifr));
+	strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
+	if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
+		perror("ioctl(SIOCGIFINDEX)");
+		return -1;
+	}
+
+	memset(&addr, 0, sizeof(addr));
+	addr.sll_family = AF_PACKET;
+	addr.sll_ifindex = ifr.ifr_ifindex;
+	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+		perror("bind");
+		return -1;
+	}
+
+	fanout_arg |= (PACKET_FANOUT_CPU << 16);
+	if (setsockopt(fd, SOL_PACKET, PACKET_FANOUT, &fanout_arg, sizeof fanout_arg) < 0) {
+		perror("setsockopt(PACKET_FANOUT)");
+		return -1;
+	}
+
+	return fd;
+}
+
+static int get_fd(void *userdata)
 {
 	int fd = *(int *)userdata;
 	if (fd < 0) {
-		fd = getsocket(1);
+		fd = get_socket(1);
 	}
 	return fd;
 }
@@ -124,7 +169,7 @@ static void make_echo(unsigned char *buf, int len)
 
 static void *blocking_loop(void *userdata) 
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	int size = 512;
 	uint64_t count = 0;
 	unsigned char buf[size];
@@ -147,7 +192,7 @@ static void *blocking_loop(void *userdata)
 
 static void *nonblocking_loop(void *userdata) 
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	int size = 512;
 	uint64_t count = 0;
 	unsigned char buf[size];
@@ -170,7 +215,7 @@ static void *nonblocking_loop(void *userdata)
 
 static void *mmsg_loop(void *userdata) 
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	int vecsize = 16;
 	int bufsize = 512;
 	uint64_t count = 0;
@@ -210,7 +255,7 @@ static void *mmsg_loop(void *userdata)
 
 static void *polling_loop(void *userdata) 
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	int size = 512;
 	uint64_t count = 0;
 	unsigned char buf[size];
@@ -243,7 +288,7 @@ static void *polling_loop(void *userdata)
 
 static void *select_loop(void *userdata) 
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	int size = 512;
 	uint64_t count = 0;
 	unsigned char buf[size];
@@ -313,7 +358,7 @@ void libevent_func(int fd, short flags, void *userdata)
 
 static void *libevent_loop(void *userdata)
 {
-	int fd = getfd(userdata);
+	int fd = get_fd(userdata);
 	struct timeval tv = default_timeval;
 	struct libevent_data data = {
 		.base = event_base_new(),
@@ -327,11 +372,91 @@ static void *libevent_loop(void *userdata)
 	return count_return(data.count);
 }
 
+static void *packet_loop(void *userdata)
+{
+	int fd = get_packet_socket(ifname);
+	int size = 512;
+	uint64_t count = 0;
+	unsigned char buf[size];
+	struct sockaddr_storage client;
+	socklen_t clientlen;
+
+	fd_set fds;
+
+	while (!quit) {
+		struct timeval tv = default_timeval;
+		int res, len;
+
+		FD_ZERO(&fds);
+		FD_SET(fd, &fds);
+
+		res = select(fd + 1, &fds, NULL, NULL, &tv);
+		if (res == 0) continue;
+		if (res < 0) {
+			perror("select");
+			break;
+		}
+
+		clientlen = sizeof(client);
+		len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
+		if (len < 0) {
+			if (errno != EAGAIN) {
+				perror("recvfrom");
+				break;
+			}
+		} else {
+			uint16_t tmp16;
+			uint32_t tmp32;
+			struct iphdr *ip = (struct iphdr *)buf;
+			struct udphdr *udp = (struct udphdr *)(buf + 4 * ip->ihl);
+			unsigned char *data = ((unsigned char *)udp) + sizeof(*udp);
+
+			/* packet too short - give up */
+			if (data > buf + len) {
+				continue;
+			}
+
+			/* not IPv4 */
+			if (ip->protocol != IPPROTO_UDP) {
+				continue;
+			}
+
+			/* not the right port */
+			if (ntohs(udp->dest) != port) {
+				continue;
+			}
+
+			/* swap source and dest addresses, ports - doesn't change IP checksum */
+			tmp32 = ip->saddr;
+			ip->saddr = ip->daddr;
+			ip->daddr = tmp32;
+
+			tmp16 = udp->source;
+			udp->source = udp->dest;
+			udp->dest = tmp16;
+
+			/* no checksum */
+			udp->check = 0;
+
+			/* return packet */
+			make_echo(data, len - (data - buf));
+			clientlen = sizeof(client);
+			if (sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen) < 0) {
+				perror("sendto");
+			}
+
+			++count;
+		}
+	}
+
+	return count_return(count);
+}
+
 __attribute__ ((noreturn))
 void usage(int ret) 
 {
 	fprintf(stderr, "usage: cmd [-p <port>] [-o outfile] [-a] [-r] [-m <mode>] [-f forks] [-t threads]\n");
-	fprintf(stderr, "  -m : <mode> = <block|nonblock|poll|select|mmsg|libevent>\n");
+	fprintf(stderr, "  -m : <mode> = <block|nonblock|poll|select|mmsg|libevent|raw>\n");
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
 	exit(ret);
@@ -377,6 +502,7 @@ int main(int argc, char *argv[])
 			case 'm': --argc; ++argv; check(argv); mode = *argv; break;
 			case 'p': --argc; ++argv; check(argv); port = atoi(*argv); break;
 			case 'o': --argc; ++argv; check(argv); outfile = strdup(*argv); break;
+			case 'i': --argc; ++argv; check(argv); ifname = strdup(*argv); break;
 			case 'a': affinity = 1; break;
 			case 'r': reuse = 1; break;
 			case 'h': usage(EXIT_SUCCESS); break;
@@ -402,6 +528,10 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "polling mode\n");
 			f = polling_loop;
 			break;
+		case 'r':
+			fprintf(stderr, "raw AF_PACKET mode\n");
+			f = packet_loop;
+			break;
 		case 's':
 			fprintf(stderr, "select mode\n");
 			f = select_loop;
@@ -418,8 +548,17 @@ int main(int argc, char *argv[])
 		badargs();
 	}
 
-	if (!reuse) {
-		fd = getsocket(0);
+	if (!reuse && f != packet_loop) {
+		fd = get_socket(0);
+	}
+
+	/* in AF_PACKET mode use the PID as the packet group */
+	if (f == packet_loop) {
+		if (!ifname) {
+			fprintf(stderr, "no interface name specified for AF_PACKET mode\n");
+			return EXIT_FAILURE;
+		}
+		fanout_arg = getpid() & 0xffff;
 	}
 
 	fprintf(stderr, "starting with %d forks and %d threads\n", forks, threads);
@@ -443,7 +582,7 @@ int main(int argc, char *argv[])
 	if (output) {
 		char buffer[200];
 		time_t now = time(NULL);
-		strftime(buffer, sizeof buffer, "%Y-%m-%d %T\n", gmtime(&now));
+		strftime(buffer, sizeof(buffer), "%Y-%m-%d %T\n", gmtime(&now));
 		fputs(buffer, output);
 		fflush(output);
 	}

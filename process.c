@@ -50,26 +50,33 @@ static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cf
 	pthread_t		pt[threads];
 	pthread_attr_t	attr;
 
-	/* start the desired number of threads */
-	pthread_attr_init(&attr);
-	for (int thread = 0; thread < threads; ++thread) {
-		pthread_create(&pt[thread], &attr, fn, data);
-		if (flags & FARM_AFFINITY_THREAD) {
-			cpu_set_t	cpus;
-			pthread_getaffinity_np(pt[thread], sizeof(cpus), &cpus);
-			getcpu(&cpus, thread);
-			pthread_setaffinity_np(pt[thread], sizeof(cpus), &cpus);
-		}
-	}
-	pthread_attr_destroy(&attr);
-
-	/* wait for all of the threads to finish */
-	for (int thread = 0; thread < threads; ++thread) {
-		void *result = NULL;
-		if (pthread_join(pt[thread], &result) == 0) {
-			if (cfn && result) {
-				cfn(childnum, thread, result);
+	if (threads > 1) {
+		/* start the desired number of threads */
+		pthread_attr_init(&attr);
+		for (int thread = 0; thread < threads; ++thread) {
+			pthread_create(&pt[thread], &attr, fn, data);
+			if (flags & FARM_AFFINITY_THREAD) {
+				cpu_set_t	cpus;
+				pthread_getaffinity_np(pt[thread], sizeof(cpus), &cpus);
+				getcpu(&cpus, thread);
+				pthread_setaffinity_np(pt[thread], sizeof(cpus), &cpus);
 			}
+		}
+		pthread_attr_destroy(&attr);
+
+		/* wait for all of the threads to finish */
+		for (int thread = 0; thread < threads; ++thread) {
+			void *result = NULL;
+			if (pthread_join(pt[thread], &result) == 0) {
+				if (cfn && result) {
+					cfn(childnum, thread, result);
+				}
+			}
+		}
+	} else {
+		void *result = fn(data);
+		if (cfn && result) {
+			cfn(childnum, 0, result);
 		}
 	}
 }
