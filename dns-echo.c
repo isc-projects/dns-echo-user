@@ -117,7 +117,7 @@ static int get_packet_socket(void *userdata)
 		return -1;
 	}
 
-	fanout_arg |= (PACKET_FANOUT_CPU << 16);
+	fanout_arg |= ((PACKET_FANOUT_LB | PACKET_FANOUT_FLAG_ROLLOVER) << 16);
 	if (setsockopt(fd, SOL_PACKET, PACKET_FANOUT, &fanout_arg, sizeof fanout_arg) < 0) {
 		perror("setsockopt(PACKET_FANOUT)");
 		return -1;
