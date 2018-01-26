@@ -15,6 +15,6 @@
 typedef void *(*handler_fn)(void *);
 typedef void  (*cleaner_fn)(int, int, void *);
 
-extern void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags);
+extern void farm(unsigned int forks, unsigned int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags);
 
 #endif /* __PROCESS_H */

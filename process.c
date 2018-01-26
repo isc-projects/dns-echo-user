@@ -27,7 +27,7 @@ static void getcpu(cpu_set_t* cpus, int n)
 	int count = CPU_COUNT(cpus);
 	n %= count;
 
-	for (int i = 0; n >= 0; ++i) {
+	for (unsigned int i = 0; n >= 0; ++i) {
 		if (CPU_ISSET(i, cpus)) {
 			if (n-- == 0) {
 				CPU_ZERO(cpus);
@@ -45,14 +45,15 @@ static void getcpu(cpu_set_t* cpus, int n)
  * specified function 'fn', optionally calling the
  * cleaner function 'cfn' on termination
  */
-static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
+static void make_threads(unsigned int childnum, unsigned int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
+	char			name[16];
 	pthread_t		pt[threads];
 	pthread_attr_t	attr;
 
 	/* start the desired number of threads */
 	pthread_attr_init(&attr);
-	for (int thread = 0; thread < threads; ++thread) {
+	for (unsigned int thread = 0; thread < threads; ++thread) {
 		pthread_create(&pt[thread], &attr, fn, data);
 		if (flags & FARM_AFFINITY_THREAD) {
 			cpu_set_t	cpus;
@@ -60,11 +61,15 @@ static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cf
 			getcpu(&cpus, thread);
 			pthread_setaffinity_np(pt[thread], sizeof(cpus), &cpus);
 		}
+
+		/* set thread name */
+		snprintf(name, sizeof(name), "process-%02d-%02d", childnum % 100, thread % 100);
+		pthread_setname_np(pt[thread], name);
 	}
 	pthread_attr_destroy(&attr);
 
 	/* wait for all of the threads to finish */
-	for (int thread = 0; thread < threads; ++thread) {
+	for (unsigned int thread = 0; thread < threads; ++thread) {
 		void *result = NULL;
 		if (pthread_join(pt[thread], &result) == 0) {
 			if (cfn && result) {
@@ -78,7 +83,7 @@ static void make_threads(int childnum, int threads, handler_fn fn, cleaner_fn cf
  * makes a collection of 'forks' subprocesses each of which
  * will spawn 'threads' threads
  */
-void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
+void farm(unsigned int forks, unsigned int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
 	/* create our own process group */
 	setpgrp();
@@ -89,7 +94,7 @@ void farm(int forks, int threads, handler_fn fn, cleaner_fn cfn, void *data, int
 	} else {
 
 		/* fork the desired number of children */
-		for (int child = 0; child < forks; ++child) {
+		for (unsigned int child = 0; child < forks; ++child) {
 			pid_t pid = fork();
 			if (pid == 0) {			/* child */
 				make_threads(child, threads, fn, cfn, data, flags);
