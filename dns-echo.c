@@ -26,12 +26,6 @@
 #include <fcntl.h>
 #include <event.h>
 
-#include <netinet/ip.h>
-#include <netinet/udp.h>
-#include <linux/if_ether.h>
-#include <linux/if_packet.h>
-#include <net/if.h>
-
 #include "process.h"
 
 /* #define BUFSIZE 32768 */
@@ -45,7 +39,6 @@ const struct timespec	default_timespec = { 0, 100e6 };
 FILE*					output;
 
 char*					ifname = NULL;
-uint32_t				fanout_arg;
 
 static int get_socket(int reuse)
 {
@@ -92,40 +85,6 @@ static int get_socket(int reuse)
 	return fd;
 }
 
-static int get_packet_socket(void *userdata)
-{
-	struct sockaddr_ll addr;
-	struct ifreq ifr;
-	int fd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
-	if (fd < 0) {
-		perror("socket(AF_PACKET)");
-		return -1;
-	}
-
-	memset(&ifr, 0, sizeof(ifr));
-	strncpy(ifr.ifr_name, ifname, IFNAMSIZ - 1);
-	if (ioctl(fd, SIOCGIFINDEX, &ifr) < 0) {
-		perror("ioctl(SIOCGIFINDEX)");
-		return -1;
-	}
-
-	memset(&addr, 0, sizeof(addr));
-	addr.sll_family = AF_PACKET;
-	addr.sll_ifindex = ifr.ifr_ifindex;
-	if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
-		perror("bind");
-		return -1;
-	}
-
-	fanout_arg |= ((PACKET_FANOUT_LB | PACKET_FANOUT_FLAG_ROLLOVER) << 16);
-	if (setsockopt(fd, SOL_PACKET, PACKET_FANOUT, &fanout_arg, sizeof fanout_arg) < 0) {
-		perror("setsockopt(PACKET_FANOUT)");
-		return -1;
-	}
-
-	return fd;
-}
-
 static int get_fd(void *userdata)
 {
 	int fd = *(int *)userdata;
@@ -135,7 +94,7 @@ static int get_fd(void *userdata)
 	return fd;
 }
 
-static void *count_return(uint64_t count)
+void *count_return(uint64_t count)
 {
 	uint64_t *p = (uint64_t *)malloc(sizeof count);
 	*p = count;
@@ -153,7 +112,7 @@ static void cleaner(int f, int t, void *data)
 	}
 }
 
-static void make_echo(unsigned char *buf, int len)
+void make_echo(unsigned char *buf, int len)
 {
 	if (len < 4) return;
 
@@ -372,84 +331,13 @@ static void *libevent_loop(void *userdata)
 	return count_return(data.count);
 }
 
+extern void *packet_helper(const char *, int, struct timeval);
+
 static void *packet_loop(void *userdata)
 {
-	int fd = get_packet_socket(ifname);
-	int size = 512;
-	uint64_t count = 0;
-	unsigned char buf[size];
-	struct sockaddr_storage client;
-	socklen_t clientlen;
+	(void) userdata;
 
-	fd_set fds;
-
-	while (!quit) {
-		struct timeval tv = default_timeval;
-		int res, len;
-
-		FD_ZERO(&fds);
-		FD_SET(fd, &fds);
-
-		res = select(fd + 1, &fds, NULL, NULL, &tv);
-		if (res == 0) continue;
-		if (res < 0) {
-			perror("select");
-			break;
-		}
-
-		clientlen = sizeof(client);
-		len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
-		if (len < 0) {
-			if (errno != EAGAIN) {
-				perror("recvfrom");
-				break;
-			}
-		} else {
-			uint16_t tmp16;
-			uint32_t tmp32;
-			struct iphdr *ip = (struct iphdr *)buf;
-			struct udphdr *udp = (struct udphdr *)(buf + 4 * ip->ihl);
-			unsigned char *data = ((unsigned char *)udp) + sizeof(*udp);
-
-			/* packet too short - give up */
-			if (data > buf + len) {
-				continue;
-			}
-
-			/* not IPv4 */
-			if (ip->protocol != IPPROTO_UDP) {
-				continue;
-			}
-
-			/* not the right port */
-			if (ntohs(udp->dest) != port) {
-				continue;
-			}
-
-			/* swap source and dest addresses, ports - doesn't change IP checksum */
-			tmp32 = ip->saddr;
-			ip->saddr = ip->daddr;
-			ip->daddr = tmp32;
-
-			tmp16 = udp->source;
-			udp->source = udp->dest;
-			udp->dest = tmp16;
-
-			/* no checksum */
-			udp->check = 0;
-
-			/* return packet */
-			make_echo(data, len - (data - buf));
-			clientlen = sizeof(client);
-			if (sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen) < 0) {
-				perror("sendto");
-			}
-
-			++count;
-		}
-	}
-
-	return count_return(count);
+	return packet_helper(ifname, port, default_timeval);
 }
 
 __attribute__ ((noreturn))
@@ -552,13 +440,9 @@ int main(int argc, char *argv[])
 		fd = get_socket(0);
 	}
 
-	/* in AF_PACKET mode use the PID as the packet group */
-	if (f == packet_loop) {
-		if (!ifname) {
-			fprintf(stderr, "no interface name specified for AF_PACKET mode\n");
-			return EXIT_FAILURE;
-		}
-		fanout_arg = getpid() & 0xffff;
+	if (f == packet_loop && !ifname) {
+		fprintf(stderr, "no interface name specified for AF_PACKET mode\n");
+		return EXIT_FAILURE;
 	}
 
 	fprintf(stderr, "starting with %d forks and %d threads\n", forks, threads);

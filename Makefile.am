@@ -7,5 +7,7 @@ bin_PROGRAMS = \
 
 dns_echo_SOURCES = \
 	dns-echo.c \
+	dns-echo.h \
+	mode-packet.c \
 	process.c \
 	process.h
