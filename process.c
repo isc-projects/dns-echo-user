@@ -6,17 +6,26 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#ifdef __linux__
 #define _GNU_SOURCE
+#endif
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <pthread.h>
 #include <unistd.h>
 #include <sched.h>
+
+#if defined(HAVE_SYS_WAIT_H)
+#include <sys/wait.h>
+#elif defined(HAVE_WAIT_H)
 #include <wait.h>
-#include <stdio.h>
+#endif
+
 #include "config.h"
 #include "process.h"
 
+#ifdef SCHED_SETAFFINITY
 /*
  * takes a cpu_set_t and modifies is so that
  * only the nth CPU (modulo the number of CPUs
@@ -39,6 +48,7 @@ static void getcpu(cpu_set_t* cpus, int n)
 
 	fprintf(stderr, "unexpectedly ran out of CPUs");
 }
+#endif
 
 /*
  * makes a collection of 'threads' threads, calling the
@@ -47,7 +57,6 @@ static void getcpu(cpu_set_t* cpus, int n)
  */
 static void make_threads(unsigned int childnum, unsigned int threads, handler_fn fn, cleaner_fn cfn, void *data, int flags)
 {
-	char			name[16];
 	pthread_t		pt[threads];
 	pthread_attr_t	attr;
 
@@ -55,16 +64,23 @@ static void make_threads(unsigned int childnum, unsigned int threads, handler_fn
 	pthread_attr_init(&attr);
 	for (unsigned int thread = 0; thread < threads; ++thread) {
 		pthread_create(&pt[thread], &attr, fn, data);
+#ifdef HAVE_PTHREAD_SETAFFINITY_NP
 		if (flags & FARM_AFFINITY_THREAD) {
 			cpu_set_t	cpus;
 			pthread_getaffinity_np(pt[thread], sizeof(cpus), &cpus);
 			getcpu(&cpus, thread);
 			pthread_setaffinity_np(pt[thread], sizeof(cpus), &cpus);
 		}
+#endif /* HAVE_PTHREAD_SETAFFINITY_NP */
 
+#if defined(HAVE_PTHREAD_SETNAME_NP) && defined(__GNU_SOURCE)
 		/* set thread name */
-		snprintf(name, sizeof(name), "process-%02d-%02d", childnum % 100, thread % 100);
-		pthread_setname_np(pt[thread], name);
+		{
+			char name[16];
+			snprintf(name, sizeof(name), "process-%02d-%02d", childnum % 100, thread % 100);
+			pthread_setname_np(pt[thread], name);
+		}
+#endif
 	}
 	pthread_attr_destroy(&attr);
 
@@ -102,6 +118,7 @@ void farm(unsigned int forks, unsigned int threads, handler_fn fn, cleaner_fn cf
 			} else if (pid < 0) {	/* error */
 				perror("fork");
 			} else {
+#ifdef HAVE_SCHED_SETAFFINITY
 				/* optionally set this sub-process's CPU affinity */
 				if (flags & FARM_AFFINITY_FORK) {
 					cpu_set_t cpus;
@@ -109,6 +126,7 @@ void farm(unsigned int forks, unsigned int threads, handler_fn fn, cleaner_fn cf
 					getcpu(&cpus, child);
 					sched_setaffinity(pid, sizeof(cpus), &cpus);
 				}
+#endif /* HAVE_SCHED_SETAFFINITY */
 			}
 		}
 

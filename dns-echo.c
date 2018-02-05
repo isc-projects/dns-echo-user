@@ -24,7 +24,10 @@
 #include <signal.h>
 #include <errno.h>
 #include <fcntl.h>
+
+#ifdef HAVE_LIBEVENT
 #include <event.h>
+#endif
 
 #include "config.h"
 #include "process.h"
@@ -108,7 +111,7 @@ static void cleaner(int f, int t, void *data)
 	free(data);
 
 	if (output) {
-		fprintf(output, "%d\t%d\t%lu\n", f, t, p);
+		fprintf(output, "%d\t%d\t%llu\n", f, t, p);
 		fflush(output);
 	}
 }
@@ -173,6 +176,7 @@ static void *nonblocking_loop(void *userdata)
 	return count_return(count);
 }
 
+#ifdef HAVE_RECVMMSG 
 static void *mmsg_loop(void *userdata) 
 {
 	int fd = get_fd(userdata);
@@ -212,6 +216,7 @@ static void *mmsg_loop(void *userdata)
 
 	return count_return(count);
 }
+#endif /* RECV_MMSG */
 
 static void *polling_loop(void *userdata) 
 {
@@ -355,12 +360,15 @@ void usage(int ret)
 	fprintf(stderr, "              | n  (= nonblock)\n");
 	fprintf(stderr, "              | p  (= poll)\n");
 	fprintf(stderr, "              | s  (= select)\n");
+#ifdef HAVE_RECVMMSG
 	fprintf(stderr, "              | m  (= recvmmsg)\n");
+#endif
 #ifdef HAVE_LIBEVENT
 	fprintf(stderr, "              | l  (= libevent)\n");
 #endif
 #ifdef HAVE_LINUX_IF_PACKET_H
 	fprintf(stderr, "              | r  (= Linux AF_PACKET mode)\n");
+	fprintf(stderr, "  -i : set AF_PACKET interface\n");
 #endif
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
@@ -425,10 +433,12 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "non-blocking mode\n");
 			f = nonblocking_loop;
 			break;
+#ifdef HAVE_RECVMMSG
 		case 'm':
 			fprintf(stderr, "mmsg mode\n");
 			f = mmsg_loop;
 			break;
+#endif
 		case 'p':
 			fprintf(stderr, "polling mode\n");
 			f = polling_loop;
@@ -457,14 +467,23 @@ int main(int argc, char *argv[])
 		badargs();
 	}
 
-	if (!reuse && f != packet_loop) {
-		fd = get_socket(0);
+	if (!reuse) {
+#ifdef HAVE_LINUX_IF_PACKET_H
+		if (f == packet_loop) {
+			/* ignored */
+		} else
+#endif
+		{
+			fd = get_socket(0);
+		}
 	}
 
+#ifdef HAVE_LINUX_IF_PACKET_H
 	if (f == packet_loop && !ifname) {
 		fprintf(stderr, "no interface name specified for AF_PACKET mode\n");
 		return EXIT_FAILURE;
 	}
+#endif
 
 	fprintf(stderr, "starting with %d forks and %d threads\n", forks, threads);
 

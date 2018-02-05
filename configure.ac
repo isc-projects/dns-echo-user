@@ -25,7 +25,8 @@ AC_CHECK_LIB([event], [event_base_new])
 AC_CHECK_LIB([pthread], [pthread_setaffinity_np])
 
 # Checks for header files.
-AC_CHECK_HEADERS([fcntl.h net/netmap.h net/netmap_user.h netdb.h stdlib.h string.h sys/socket.h unistd.h])
+AC_CHECK_HEADERS([fcntl.h net/netmap.h net/netmap_user.h netdb.h stdlib.h string.h])
+AC_CHECK_HEADERS([sys/socket.h unistd.h wait.h sys/wait.h])
 
 AC_CHECK_HEADERS([linux/if_packet.h])
 
@@ -33,7 +34,11 @@ AC_CHECK_HEADERS([linux/if_packet.h])
 AC_TYPE_SSIZE_T
 
 # Checks for standard library functions.
-AC_CHECK_FUNCS([socket poll select])
+AC_CHECK_FUNCS([socket poll select recvmmsg])
+
+# Checks for non-standard library functions
+AC_CHECK_FUNCS([pthread_setaffinity_np pthread_setname_np])
+AC_CHECK_FUNCS([sched_setaffinity])
 
 # Enable extra warnings
 WARNING_FLAGS="-fdiagnostics-show-option -Wall -Wextra -Wno-unused-parameter -Wstrict-prototypes -Wundef -Wformat=2 -Wmissing-include-dirs -Wformat-nonliteral -Wold-style-definition -Wpointer-arith -Waggregate-return -Winit-self -Wpacked -Wc++-compat -Wno-long-long -Wno-overlength-strings -Wdeclaration-after-statement -Wredundant-decls -Wmissing-noreturn -Wshadow -Wendif-labels -Wcast-qual -Wwrite-strings -fno-common"
