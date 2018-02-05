@@ -26,6 +26,7 @@
 #include <fcntl.h>
 #include <event.h>
 
+#include "config.h"
 #include "process.h"
 
 /* #define BUFSIZE 32768 */
@@ -283,6 +284,8 @@ static void *select_loop(void *userdata)
 	return count_return(count);
 }
 
+#ifdef HAVE_LIBEVENT
+
 /*
  * struct required to allow both the event_base and the count
  * variable to be passed to the libevent callback function
@@ -331,6 +334,9 @@ static void *libevent_loop(void *userdata)
 	return count_return(data.count);
 }
 
+#endif /* HAVE_LIBEVENT */
+
+#ifdef HAVE_LINUX_IF_PACKET_H
 extern void *packet_helper(const char *, int, struct timeval);
 
 static void *packet_loop(void *userdata)
@@ -339,12 +345,23 @@ static void *packet_loop(void *userdata)
 
 	return packet_helper(ifname, port, default_timeval);
 }
+#endif /* HAVE_LINUX_IF_PACKET_H */
 
 __attribute__ ((noreturn))
 void usage(int ret) 
 {
 	fprintf(stderr, "usage: cmd [-p <port>] [-o outfile] [-a] [-r] [-m <mode>] [-f forks] [-t threads]\n");
-	fprintf(stderr, "  -m : <mode> = <block|nonblock|poll|select|mmsg|libevent|raw>\n");
+	fprintf(stderr, "  -m : <mode> = b  (= blocking)\n");
+	fprintf(stderr, "              | n  (= nonblock)\n");
+	fprintf(stderr, "              | p  (= poll)\n");
+	fprintf(stderr, "              | s  (= select)\n");
+	fprintf(stderr, "              | m  (= recvmmsg)\n");
+#ifdef HAVE_LIBEVENT
+	fprintf(stderr, "              | l  (= libevent)\n");
+#endif
+#ifdef HAVE_LINUX_IF_PACKET_H
+	fprintf(stderr, "              | r  (= Linux AF_PACKET mode)\n");
+#endif
 	fprintf(stderr, "  -a : set processor affinity\n");
 	fprintf(stderr, "  -r : enable SO_REUSEPORT\n");
 	exit(ret);
@@ -416,18 +433,22 @@ int main(int argc, char *argv[])
 			fprintf(stderr, "polling mode\n");
 			f = polling_loop;
 			break;
+#ifdef HAVE_LINUX_IF_PACKET_H
 		case 'r':
 			fprintf(stderr, "raw AF_PACKET mode\n");
 			f = packet_loop;
 			break;
+#endif
 		case 's':
 			fprintf(stderr, "select mode\n");
 			f = select_loop;
 			break;
 		case 'l':
+#ifdef HAVE_LIBEVENT
 			fprintf(stderr, "libevent mode (%s)\n", event_base_get_method(event_base_new()));
 			f = libevent_loop;
 			break;
+#endif
 		default:
 			badargs();
 	}

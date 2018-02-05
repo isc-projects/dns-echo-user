@@ -27,6 +27,8 @@ AC_CHECK_LIB([pthread], [pthread_setaffinity_np])
 # Checks for header files.
 AC_CHECK_HEADERS([fcntl.h net/netmap.h net/netmap_user.h netdb.h stdlib.h string.h sys/socket.h unistd.h])
 
+AC_CHECK_HEADERS([linux/if_packet.h])
+
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_SSIZE_T
 

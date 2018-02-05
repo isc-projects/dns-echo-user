@@ -22,7 +22,10 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 
+#include "config.h"
 #include "dns-echo.h"
+
+#ifdef HAVE_LINUX_IF_PACKET_H
 
 static int get_packet_socket(const char *ifname)
 {
@@ -139,3 +142,5 @@ void *packet_helper(const char *ifname, int port, struct timeval timeout)
 
 	return count_return(count);
 }
+
+#endif /* HAVE_LINUX_IF_PACKET_H */
