@@ -10,6 +10,8 @@
 #define _GNU_SOURCE
 #endif
 
+#include "config.h"
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <pthread.h>
@@ -22,10 +24,9 @@
 #include <wait.h>
 #endif
 
-#include "config.h"
 #include "process.h"
 
-#ifdef SCHED_SETAFFINITY
+#if defined(HAVE_SCHED_SETAFFINITY) || defined(HAVE_PTHREAD_SETAFFINITY_NP)
 /*
  * takes a cpu_set_t and modifies is so that
  * only the nth CPU (modulo the number of CPUs

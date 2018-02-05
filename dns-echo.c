@@ -8,6 +8,8 @@
 
 #define _GNU_SOURCE
 
+#include "config.h"
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -29,7 +31,6 @@
 #include <event.h>
 #endif
 
-#include "config.h"
 #include "process.h"
 
 /* #define BUFSIZE 32768 */

@@ -8,6 +8,8 @@
 
 #define _GNU_SOURCE
 
+#include "config.h"
+
 #ifdef HAVE_LINUX_IF_PACKET_H
 
 #include <stdlib.h>
@@ -24,7 +26,6 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 
-#include "config.h"
 #include "dns-echo.h"
 
 static int get_packet_socket(const char *ifname)
