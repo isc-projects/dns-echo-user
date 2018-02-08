@@ -19,6 +19,7 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
+#include <poll.h>
 
 #include <net/if.h>
 #include <netinet/ip.h>
@@ -64,28 +65,23 @@ static int get_packet_socket(const char *ifname)
 	return fd;
 }
 
-void *packet_helper(const char *ifname, int port, struct timeval timeout)
+void *packet_helper(const char *ifname, int port, int timeout)
 {
 	int fd = get_packet_socket(ifname);
 	int size = 512;
 	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
+	struct pollfd fds = { fd, POLLIN, 0 };
 	socklen_t clientlen;
 
-	fd_set fds;
-
 	while (!quit) {
-		struct timeval tv = timeout;
 		int res, len;
 
-		FD_ZERO(&fds);
-		FD_SET(fd, &fds);
-
-		res = select(fd + 1, &fds, NULL, NULL, &tv);
+		res = poll(&fds, 1, timeout); 
 		if (res == 0) continue;
 		if (res < 0) {
-			perror("select");
+			perror("poll");
 			break;
 		}
 

@@ -112,7 +112,7 @@ static void cleaner(int f, int t, void *data)
 	free(data);
 
 	if (output) {
-		fprintf(output, "%d\t%d\t%llu\n", f, t, p);
+		fprintf(output, "%d\t%d\t%lu\n", f, t, p);
 		fflush(output);
 	}
 }
@@ -343,13 +343,13 @@ static void *libevent_loop(void *userdata)
 #endif /* HAVE_LIBEVENT */
 
 #ifdef HAVE_LINUX_IF_PACKET_H
-extern void *packet_helper(const char *, int, struct timeval);
+extern void *packet_helper(const char *, int, int);
 
 static void *packet_loop(void *userdata)
 {
 	(void) userdata;
 
-	return packet_helper(ifname, port, default_timeval);
+	return packet_helper(ifname, port, default_timeout);
 }
 #endif /* HAVE_LINUX_IF_PACKET_H */
 
