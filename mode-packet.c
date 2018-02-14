@@ -33,7 +33,7 @@ static int get_packet_socket(const char *ifname)
 {
 	struct sockaddr_ll addr;
 	struct ifreq ifr;
-	uint32_t fanout_arg = getpid() & 0xffff; /* use the PID as the packet group */
+	uint32_t fanout_arg = getppid() & 0xffff; /* use the parent's PID as the packet group */
 
 	int fd = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
 	if (fd < 0) {
