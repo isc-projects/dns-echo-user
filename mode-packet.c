@@ -19,7 +19,6 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <sys/ioctl.h>
-#include <poll.h>
 
 #include <net/if.h>
 #include <netinet/ip.h>
@@ -56,7 +55,7 @@ static int get_packet_socket(const char *ifname)
 		return -1;
 	}
 
-	fanout_arg |= ((PACKET_FANOUT_LB | PACKET_FANOUT_FLAG_ROLLOVER) << 16);
+	fanout_arg |= (PACKET_FANOUT_CPU << 16);
 	if (setsockopt(fd, SOL_PACKET, PACKET_FANOUT, &fanout_arg, sizeof fanout_arg) < 0) {
 		perror("setsockopt(PACKET_FANOUT)");
 		return -1;
@@ -72,18 +71,11 @@ void *packet_helper(const char *ifname, int port, int timeout)
 	uint64_t count = 0;
 	unsigned char buf[size];
 	struct sockaddr_storage client;
-	struct pollfd fds = { fd, POLLIN, 0 };
 	socklen_t clientlen;
 
 	while (!quit) {
-		int res, len;
 
-		res = poll(&fds, 1, timeout); 
-		if (res == 0) continue;
-		if (res < 0) {
-			perror("poll");
-			break;
-		}
+		int len;
 
 		clientlen = sizeof(client);
 		len = recvfrom(fd, buf, size, 0, (struct sockaddr *)&client, &clientlen);
@@ -128,7 +120,7 @@ void *packet_helper(const char *ifname, int port, int timeout)
 
 			/* return packet */
 			make_echo(data, len - (data - buf));
-			clientlen = sizeof(client);
+			clientlen = sizeof(struct sockaddr_ll);
 			if (sendto(fd, buf, len, 0, (struct sockaddr *)&client, clientlen) < 0) {
 				perror("sendto");
 			}
