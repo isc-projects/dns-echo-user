@@ -32,7 +32,7 @@
  * only the nth CPU (modulo the number of CPUs
  * in the original set) is returned
  */
-static void getcpu(cpu_set_t* cpus, int n)
+static void set_one_cpu(cpu_set_t* cpus, int n)
 {
 	int count = CPU_COUNT(cpus);
 	n %= count;
@@ -69,7 +69,7 @@ static void make_threads(unsigned int childnum, unsigned int threads, handler_fn
 		if (flags & FARM_AFFINITY_THREAD) {
 			cpu_set_t	cpus;
 			pthread_getaffinity_np(pt[thread], sizeof(cpus), &cpus);
-			getcpu(&cpus, thread);
+			set_one_cpu(&cpus, thread);
 			pthread_setaffinity_np(pt[thread], sizeof(cpus), &cpus);
 		}
 #endif /* HAVE_PTHREAD_SETAFFINITY_NP */
@@ -124,7 +124,7 @@ void farm(unsigned int forks, unsigned int threads, handler_fn fn, cleaner_fn cf
 				if (flags & FARM_AFFINITY_FORK) {
 					cpu_set_t cpus;
 					sched_getaffinity(pid, sizeof(cpus), &cpus);
-					getcpu(&cpus, child);
+					set_one_cpu(&cpus, child);
 					sched_setaffinity(pid, sizeof(cpus), &cpus);
 				}
 #endif /* HAVE_SCHED_SETAFFINITY */
